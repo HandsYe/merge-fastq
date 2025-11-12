@@ -1,0 +1,46 @@
+# 编译产物
+*.o
+fastq_merger
+seq_replacer
+
+# 测试文件
+test_*.fq
+test_*.fa
+test_*.fq.gz
+test_*.fa.gz
+output_*.fq
+output_*.fa
+output_*.fq.gz
+output_*.fa.gz
+merged_*.fq
+merged_*.fq.gz
+
+# 日志文件
+*.log
+replacements.log
+position_changes.log
+
+# 临时文件
+*.tmp
+*.swp
+*~
+
+# 大数据文件（根据需要调整）
+*.fq
+*.fastq
+*.fa
+*.fasta
+!test_example*.fq
+!test_example*.fa
+
+# 压缩文件
+# *.gz  # 如果不想跟踪压缩文件，取消注释
+
+# IDE 文件
+.vscode/
+.idea/
+*.sublime-*
+
+# 系统文件
+.DS_Store
+Thumbs.db

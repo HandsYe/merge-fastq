@@ -1,0 +1,50 @@
+FASTQ/FASTA 处理工具 - 文件清单
+=====================================
+
+文档文件：
+---------
+README.md              - 完整的项目文档和使用说明
+QUICKSTART.md          - 快速入门指南
+PROJECT_SUMMARY.md     - 项目总结
+FILE_LIST.txt          - 本文件清单
+
+配置文件：
+---------
+Makefile               - 编译配置文件
+.gitignore             - Git 忽略文件配置
+
+脚本文件：
+---------
+examples.sh            - 示例演示脚本
+demo_replacement.sh    - 替换功能演示脚本
+
+源代码文件（共享）：
+------------------
+fastq_parser.c/h       - FASTQ 文件解析器
+utils.c/h              - 通用工具函数
+
+fastq_merger 源代码：
+--------------------
+main.c                 - fastq_merger 主程序
+id_generator.c/h       - 序列 ID 生成器
+file_merger.c/h        - 文件合并模块
+
+seq_replacer 源代码：
+--------------------
+seq_replace_main.c     - seq_replacer 主程序
+seq_replacer.c/h       - 序列替换模块
+
+编译产物（运行 make 后生成）：
+-----------------------------
+fastq_merger           - FASTQ 合并工具可执行文件
+seq_replacer           - 序列替换工具可执行文件
+*.o                    - 目标文件（中间产物）
+
+使用说明：
+---------
+1. 编译：make
+2. 运行示例：./examples.sh
+3. 查看帮助：./fastq_merger --help 或 ./seq_replacer --help
+4. 清理：make clean
+
+更多信息请查看 README.md
