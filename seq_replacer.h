@@ -7,7 +7,7 @@
 /* Replacement mode */
 typedef enum {
     MODE_RANDOM,         /* Random replacement: one random read at random position */
-    MODE_RANDOM_FIXED,   /* Random read at fixed position */
+    MODE_RANDOM_FIXED,   /* Random read at fixed position (fastest) */
     MODE_POSITION,       /* Position-specific replacement in all sequences */
     MODE_SINGLE          /* Replace only one specific sequence in the entire file */
 } ReplacementMode;
@@ -16,7 +16,8 @@ typedef enum {
 typedef struct {
     char *input_file;
     char *output_file;
-    char *replacement_seq;
+    char **replacement_seqs;  /* Array of replacement sequences */
+    int num_replacements;     /* Number of replacement sequences */
     char *log_file;
     ReplacementMode mode;
     size_t position;      /* For position/single mode: 0-based position in sequence */

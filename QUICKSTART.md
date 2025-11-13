@@ -1,69 +1,77 @@
-# 快速入门指南
+# 快速开始指南
 
-## 1. 编译工具
+## 5分钟上手
+
+### 1. 编译
 
 ```bash
 make
 ```
 
-编译成功后会生成两个可执行文件：
-- `fastq_merger` - FASTQ 文件合并工具
-- `seq_replacer` - 序列替换工具
-
-## 2. 运行示例
+### 2. 测试 fastq_merger
 
 ```bash
-./examples.sh
-```
+# 查看帮助
+./fastq_merger --help
 
-这个脚本会演示所有主要功能。
-
-## 3. 常用命令
-
-### 合并 FASTQ 文件
-
-```bash
-# 基本用法
+# 合并两个文件（如果你有测试数据）
 ./fastq_merger -i file1.fq.gz -i file2.fq.gz -o merged.fq.gz -v
-
-# 自定义 ID 参数
-./fastq_merger -i file1.fq -i file2.fq -o output.fq \
-    -p INSTRUMENT -r 1 -f FLOWCELL -l 1 -v
 ```
 
-### 序列替换
+### 3. 测试 seq_replacer
 
 ```bash
-# 随机替换（随机 reads + 随机位置）
-./seq_replacer -i input.fq.gz -o output.fq.gz -s ATCGATCG -r -v
+# 查看帮助
+./seq_replacer --help
 
-# 随机 reads + 固定位置
+# 随机替换（最快模式）
+./seq_replacer -i input.fq.gz -o output.fq.gz -s ATCGATCG -R 20 -v
+```
+
+## 常用命令
+
+### fastq_merger
+
+```bash
+# 基本合并
+./fastq_merger -i file1.fq.gz -i file2.fq.gz -o merged.fq.gz
+
+# 自定义参数
+./fastq_merger -i file1.fq -i file2.fq -o output.fq \
+    -p MYINST -r 100 -f FC001 -l 2 -v
+```
+
+### seq_replacer
+
+```bash
+# 最快模式：随机reads，指定位置
 ./seq_replacer -i input.fq.gz -o output.fq.gz -s ATCGATCG -R 20 -v
 
-# 指定 reads + 指定位置
+# 指定reads模式
 ./seq_replacer -i input.fq.gz -o output.fq.gz -s ATCGATCG -1 3 10 -v
 
-# 所有 reads + 相同位置
-./seq_replacer -i input.fa -o output.fa -s NNNNNNNN -p 50 -v
+# 随机模式
+./seq_replacer -i input.fq.gz -o output.fq.gz -s ATCGATCG -r -v
+
+# 全部替换
+./seq_replacer -i input.fa -o output.fa -s NNNNNNNN -p 50
 ```
 
-## 4. 查看帮助
+## 模式选择指南
 
-```bash
-./fastq_merger --help
-./seq_replacer --help
-```
+### seq_replacer 模式
 
-## 5. 清理
+| 需求 | 推荐模式 | 命令 |
+|------|---------|------|
+| 最快速度 | `-R` | `-R 20` |
+| 精确控制 | `-1` | `-1 3 10` |
+| 随机测试 | `-r` | `-r` |
+| 批量替换 | `-p` | `-p 50` |
 
-```bash
-# 清理编译产物
-make clean
+## 查看更多
 
-# 删除测试文件
-rm -f test_*.fq output_*.fq *.log
-```
-
-## 更多信息
-
-详细文档请查看 [README.md](README.md)
+- 完整文档：`README.md`
+- 性能指南：`docs/PERFORMANCE.md`
+- API 文档：`docs/API.md`
+- 项目结构：`PROJECT_STRUCTURE.md`
+- 示例脚本：`examples/`

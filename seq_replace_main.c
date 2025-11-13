@@ -14,10 +14,10 @@ void print_usage(const char *program_name) {
     printf("  -i, --input <file>     Input FASTA/FASTQ file (.fa, .fq, .fasta, .fastq)\n");
     printf("                         Supports gzipped files (.gz extension)\n");
     printf("  -o, --output <file>    Output file path\n");
-    printf("  -s, --sequence <seq>   Replacement sequence\n\n");
+    printf("  -s, --sequence <seq>   Replacement sequence (can be specified multiple times)\n\n");
     printf("Replacement mode (choose one):\n");
     printf("  -r, --random           Random mode: replace one random read at random position\n");
-    printf("  -R, --random-pos <pos> Random-fixed mode: replace one random read at position <pos>\n");
+    printf("  -R, --random-pos <pos> Random-fixed mode: one random read at position <pos> (FASTEST)\n");
     printf("  -p, --position <pos>   Position mode: replace at position <pos> in all sequences\n");
     printf("                         (0-based position)\n");
     printf("  -1, --single <n> <pos> Single mode: replace only read #n at position <pos>\n");
@@ -31,12 +31,12 @@ void print_usage(const char *program_name) {
     printf("Examples:\n");
     printf("  # Replace only the 3rd read at position 10\n");
     printf("  %s -i input.fq.gz -o output.fq.gz -s ATCGATCG -1 3 10 -v\n\n", program_name);
+    printf("  # Random read at position 20 with multiple sequences (FASTEST)\n");
+    printf("  %s -i input.fq.gz -o output.fq.gz -s ATCGATCG -s GCGCGCGC -R 20 -v\n\n", program_name);
     printf("  # Random replacement: one random read at random position\n");
     printf("  %s -i input.fq.gz -o output.fq.gz -s ATCGATCG -r -v\n\n", program_name);
-    printf("  # Random read at fixed position 20\n");
-    printf("  %s -i input.fq.gz -o output.fq.gz -s ATCGATCG -R 20 -v\n\n", program_name);
-    printf("  # Replace at position 50 in all sequences\n");
-    printf("  %s -i input.fa -o output.fa -s NNNNNNNN -p 50 -l changes.log\n\n", program_name);
+    printf("  # Replace at position 50 in all sequences with multiple sequences\n");
+    printf("  %s -i input.fa -o output.fa -s NNNNNNNN -s XXXXXXXX -p 50 -l changes.log\n\n", program_name);
     printf("  # Reproducible random replacement with seed\n");
     printf("  %s -i input.fq -o output.fq -s GCGCGCGC -r --seed 12345\n", program_name);
 }
@@ -54,7 +54,8 @@ int main(int argc, char *argv[]) {
     /* Variables for command line arguments */
     char *input_file = NULL;
     char *output_file = NULL;
-    char *replacement_seq = NULL;
+    char **replacement_seqs = safe_malloc(sizeof(char*) * 100);  /* Max 100 sequences */
+    int num_replacement_seqs = 0;
     char *log_file = "replacements.log";
     ReplacementMode mode = MODE_RANDOM;
     size_t position = 0;
@@ -86,9 +87,15 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--sequence") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Error: -s/--sequence requires a sequence argument\n");
+                free(replacement_seqs);
                 return ERR_INVALID_PARAM;
             }
-            replacement_seq = argv[++i];
+            if (num_replacement_seqs >= 100) {
+                fprintf(stderr, "Error: Too many replacement sequences (max 100)\n");
+                free(replacement_seqs);
+                return ERR_INVALID_PARAM;
+            }
+            replacement_seqs[num_replacement_seqs++] = argv[++i];
         } else if (strcmp(argv[i], "-r") == 0 || strcmp(argv[i], "--random") == 0) {
             mode = MODE_RANDOM;
             mode_set = 1;
@@ -155,14 +162,15 @@ int main(int argc, char *argv[]) {
         return ERR_INVALID_PARAM;
     }
     
-    if (replacement_seq == NULL) {
-        fprintf(stderr, "Error: Replacement sequence must be specified\n");
+    if (num_replacement_seqs == 0) {
+        fprintf(stderr, "Error: At least one replacement sequence must be specified\n");
         print_usage(argv[0]);
+        free(replacement_seqs);
         return ERR_INVALID_PARAM;
     }
     
     if (!mode_set) {
-        fprintf(stderr, "Error: Must specify either -r/--random or -p/--position\n");
+        fprintf(stderr, "Error: Must specify either -r/--random, -p/--position, or -1/--single\n");
         print_usage(argv[0]);
         return ERR_INVALID_PARAM;
     }
@@ -177,7 +185,8 @@ int main(int argc, char *argv[]) {
     ReplacerConfig config;
     config.input_file = input_file;
     config.output_file = output_file;
-    config.replacement_seq = replacement_seq;
+    config.replacement_seqs = replacement_seqs;
+    config.num_replacements = num_replacement_seqs;
     config.log_file = log_file;
     config.mode = mode;
     config.position = position;
@@ -191,7 +200,10 @@ int main(int argc, char *argv[]) {
         printf("Configuration:\n");
         printf("  Input: %s\n", input_file);
         printf("  Output: %s\n", output_file);
-        printf("  Replacement sequence: %s\n", replacement_seq);
+        printf("  Replacement sequences (%d): ", num_replacement_seqs);
+        for (int i = 0; i < num_replacement_seqs; i++) {
+            printf("%s%s", replacement_seqs[i], i < num_replacement_seqs - 1 ? ", " : "\n");
+        }
         printf("  Mode: %s\n", 
                mode == MODE_SINGLE ? "Single" : 
                (mode == MODE_RANDOM ? "Random" : 
@@ -216,6 +228,9 @@ int main(int argc, char *argv[]) {
     if (result != SUCCESS) {
         fprintf(stderr, "\nReplacement failed with error code: %d\n", result);
     }
+    
+    /* Cleanup */
+    free(replacement_seqs);
     
     return result;
 }

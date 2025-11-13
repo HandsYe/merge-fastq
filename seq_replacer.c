@@ -96,36 +96,54 @@ static void log_replacement(FILE *log_fp, const ReplacementRecord *record) {
 
 /* Process FASTQ file */
 static int process_fastq(const ReplacerConfig *config) {
-    size_t random_read_index = 0;
+    size_t *random_read_indices = NULL;
+    size_t *random_positions = NULL;
+    int num_to_replace = config->num_replacements;
     
-    /* For random modes: first pass to count reads and select random one */
+    /* Allocate arrays for multiple replacements */
+    random_read_indices = safe_malloc(sizeof(size_t) * num_to_replace);
+    random_positions = safe_malloc(sizeof(size_t) * num_to_replace);
+    
+    /* For random modes: quickly count reads and select multiple random reads */
     if (config->mode == MODE_RANDOM || config->mode == MODE_RANDOM_FIXED) {
-        FastqReader *counter = fastq_reader_open(config->input_file);
-        if (counter == NULL) {
-            return ERR_FILE_OPEN;
+        char command[2048];
+        FILE *wc_fp;
+        
+        if (strstr(config->input_file, ".gz") != NULL) {
+            snprintf(command, sizeof(command), "gzip -dc '%s' | wc -l", config->input_file);
+        } else {
+            snprintf(command, sizeof(command), "wc -l < '%s'", config->input_file);
         }
         
-        FastqRecord record;
-        size_t total_reads = 0;
-        int read_result;
-        
-        while ((read_result = fastq_reader_next(counter, &record)) > 0) {
-            total_reads++;
-            fastq_record_free(&record);
+        wc_fp = popen(command, "r");
+        if (wc_fp != NULL) {
+            size_t total_lines = 0;
+            if (fscanf(wc_fp, "%zu", &total_lines) == 1) {
+                size_t total_reads = total_lines / 4;  /* FASTQ has 4 lines per read */
+                if (total_reads > 0) {
+                    /* Select multiple random reads (one for each replacement sequence) */
+                    for (int i = 0; i < num_to_replace; i++) {
+                        random_read_indices[i] = (rand() % total_reads) + 1;
+                        random_positions[i] = 0;  /* Will be set later if needed */
+                    }
+                    if (config->verbose) {
+                        printf("Random mode: selected %d reads out of %zu total reads: ", 
+                               num_to_replace, total_reads);
+                        for (int i = 0; i < num_to_replace; i++) {
+                            printf("#%zu%s", random_read_indices[i], 
+                                   i < num_to_replace - 1 ? ", " : "\n");
+                        }
+                    }
+                }
+            }
+            pclose(wc_fp);
         }
-        fastq_reader_close(counter);
         
-        if (total_reads == 0) {
-            fprintf(stderr, "Error: No reads found in input file\n");
+        if (random_read_indices[0] == 0) {
+            fprintf(stderr, "Error: Could not count reads in input file\n");
+            free(random_read_indices);
+            free(random_positions);
             return ERR_INVALID_FORMAT;
-        }
-        
-        /* Select random read (1-based) */
-        random_read_index = (rand() % total_reads) + 1;
-        
-        if (config->verbose) {
-            printf("Random mode: selected read #%zu out of %zu total reads\n", 
-                   random_read_index, total_reads);
         }
     }
     
@@ -164,38 +182,62 @@ static int process_fastq(const ReplacerConfig *config) {
     int read_result;
     size_t record_count = 0;
     size_t replacement_count = 0;
-    size_t repl_len = strlen(config->replacement_seq);
     
     while ((read_result = fastq_reader_next(reader, &record)) > 0) {
         record_count++;
         int should_replace = 0;
         size_t replace_pos = 0;
+        char *replacement_seq = NULL;
+        int replacement_idx = -1;
         
         if (config->mode == MODE_SINGLE) {
             /* Single mode: only replace the target read */
             if (record_count == config->target_read_index) {
                 should_replace = 1;
                 replace_pos = config->position;
+                replacement_seq = config->replacement_seqs[0];
             }
-        } else if (config->mode == MODE_RANDOM) {
-            /* Random mode: only replace the randomly selected read at random position */
-            if (record_count == random_read_index) {
-                should_replace = 1;
-                replace_pos = find_random_position(strlen(record.sequence), repl_len);
-            }
-        } else if (config->mode == MODE_RANDOM_FIXED) {
-            /* Random fixed mode: only replace the randomly selected read at fixed position */
-            if (record_count == random_read_index) {
-                should_replace = 1;
-                replace_pos = config->position;
+        } else if (config->mode == MODE_RANDOM || config->mode == MODE_RANDOM_FIXED) {
+            /* Random modes: check if this read is one of the selected ones */
+            for (int i = 0; i < num_to_replace; i++) {
+                if (record_count == random_read_indices[i]) {
+                    should_replace = 1;
+                    replacement_idx = i;
+                    replacement_seq = config->replacement_seqs[i];
+                    
+                    if (config->mode == MODE_RANDOM) {
+                        /* Generate random position if not already set */
+                        if (random_positions[i] == 0) {
+                            random_positions[i] = find_random_position(
+                                strlen(record.sequence), strlen(replacement_seq));
+                        }
+                        replace_pos = random_positions[i];
+                    } else {
+                        /* Fixed position */
+                        replace_pos = config->position;
+                    }
+                    break;
+                }
             }
         } else {
-            /* Position mode: always replace at specified position */
+            /* Position mode: replace all reads at specified position */
             should_replace = 1;
             replace_pos = config->position;
+            /* Use sequences in rotation */
+            replacement_seq = config->replacement_seqs[replacement_count % num_to_replace];
         }
         
-        if (should_replace && strlen(record.sequence) >= repl_len + replace_pos) {
+        if (!should_replace || replacement_seq == NULL) {
+            /* Write record unchanged */
+            fprintf(out_fp, "@%s\n%s\n%s\n%s\n",
+                    record.seq_id, record.sequence, record.plus_line, record.quality);
+            fastq_record_free(&record);
+            continue;
+        }
+        
+        size_t repl_len = strlen(replacement_seq);
+        
+        if (strlen(record.sequence) >= repl_len + replace_pos) {
             /* Save original sequence segment */
             char *original_segment = safe_malloc(repl_len + 1);
             memcpy(original_segment, record.sequence + replace_pos, repl_len);
@@ -204,7 +246,7 @@ static int process_fastq(const ReplacerConfig *config) {
             /* Perform replacement */
             size_t actual_pos;
             char *new_sequence = replace_at_position(record.sequence, 
-                                                     config->replacement_seq, 
+                                                     replacement_seq, 
                                                      replace_pos, &actual_pos);
             
             if (new_sequence != NULL) {
@@ -214,14 +256,18 @@ static int process_fastq(const ReplacerConfig *config) {
                     rep_record.seq_id = record.seq_id;
                     rep_record.position = actual_pos;
                     rep_record.original_seq = original_segment;
-                    rep_record.new_seq = config->replacement_seq;
+                    rep_record.new_seq = replacement_seq;
                     log_replacement(log_fp, &rep_record);
                 }
                 
                 if (config->verbose) {
-                    printf("Replaced in %s at position %zu: %s -> %s\n",
-                           record.seq_id, actual_pos, original_segment, 
-                           config->replacement_seq);
+                    printf("Replaced in %s at position %zu: %s -> %s",
+                           record.seq_id, actual_pos, original_segment, replacement_seq);
+                    if (replacement_idx >= 0) {
+                        printf(" (seq #%d)\n", replacement_idx + 1);
+                    } else {
+                        printf("\n");
+                    }
                 }
                 
                 /* Update sequence */
@@ -239,6 +285,10 @@ static int process_fastq(const ReplacerConfig *config) {
         
         fastq_record_free(&record);
     }
+    
+    /* Cleanup */
+    free(random_read_indices);
+    free(random_positions);
     
     /* Cleanup */
     fastq_reader_close(reader);
@@ -262,53 +312,45 @@ static int process_fastq(const ReplacerConfig *config) {
 
 /* Process FASTA file */
 static int process_fasta(const ReplacerConfig *config) {
-    size_t random_read_index = 0;
+    size_t random_seq_index = 0;
     
-    /* For random modes: first pass to count sequences */
+    /* Select random replacement sequence if multiple provided */
+    char *selected_replacement = config->replacement_seqs[0];
+    if (config->num_replacements > 1) {
+        int selected_idx = rand() % config->num_replacements;
+        selected_replacement = config->replacement_seqs[selected_idx];
+        if (config->verbose) {
+            printf("Selected replacement sequence #%d: %s\n", selected_idx + 1, selected_replacement);
+        }
+    }
+    
+    /* For random modes: quickly count sequences using grep */
     if (config->mode == MODE_RANDOM || config->mode == MODE_RANDOM_FIXED) {
-        FILE *counter_fp = NULL;
-        int is_counter_pipe = 0;
+        char command[2048];
+        FILE *grep_fp;
         
         if (strstr(config->input_file, ".gz") != NULL) {
-            char command[2048];
-            snprintf(command, sizeof(command), "gzip -dc '%s'", config->input_file);
-            counter_fp = popen(command, "r");
-            is_counter_pipe = 1;
+            snprintf(command, sizeof(command), "gzip -dc '%s' | grep -c '^>'", config->input_file);
         } else {
-            counter_fp = fopen(config->input_file, "r");
+            snprintf(command, sizeof(command), "grep -c '^>' '%s'", config->input_file);
         }
         
-        if (counter_fp == NULL) {
-            return ERR_FILE_OPEN;
-        }
-        
-        char *line = NULL;
-        size_t line_size = 0;
-        ssize_t read;
-        size_t total_seqs = 0;
-        
-        while ((read = getline(&line, &line_size, counter_fp)) != -1) {
-            if (line[0] == '>') {
-                total_seqs++;
+        grep_fp = popen(command, "r");
+        if (grep_fp != NULL) {
+            size_t total_seqs = 0;
+            if (fscanf(grep_fp, "%zu", &total_seqs) == 1 && total_seqs > 0) {
+                random_seq_index = (rand() % total_seqs) + 1;
+                if (config->verbose) {
+                    printf("Random mode: selected sequence #%zu out of %zu total sequences\n", 
+                           random_seq_index, total_seqs);
+                }
             }
+            pclose(grep_fp);
         }
         
-        if (line != NULL) free(line);
-        
-        if (is_counter_pipe) pclose(counter_fp);
-        else fclose(counter_fp);
-        
-        if (total_seqs == 0) {
-            fprintf(stderr, "Error: No sequences found in input file\n");
+        if (random_seq_index == 0) {
+            fprintf(stderr, "Error: Could not count sequences in input file\n");
             return ERR_INVALID_FORMAT;
-        }
-        
-        /* Select random sequence (1-based) */
-        random_read_index = (rand() % total_seqs) + 1;
-        
-        if (config->verbose) {
-            printf("Random mode: selected sequence #%zu out of %zu total sequences\n", 
-                   random_read_index, total_seqs);
         }
     }
     
@@ -364,7 +406,8 @@ static int process_fasta(const ReplacerConfig *config) {
     size_t seq_length = 0;
     size_t record_count = 0;
     size_t replacement_count = 0;
-    size_t repl_len = strlen(config->replacement_seq);
+    size_t repl_len = strlen(selected_replacement);
+    size_t random_position = 0;
     
     current_seq = safe_malloc(seq_capacity);
     current_seq[0] = '\0';
@@ -385,14 +428,17 @@ static int process_fasta(const ReplacerConfig *config) {
                         replace_pos = config->position;
                     }
                 } else if (config->mode == MODE_RANDOM) {
-                    /* Random mode: only replace the randomly selected sequence at random position */
-                    if (record_count == random_read_index) {
+                    /* Random mode: only replace the pre-selected sequence at random position */
+                    if (record_count == random_seq_index) {
                         should_replace = 1;
-                        replace_pos = find_random_position(seq_length, repl_len);
+                        if (random_position == 0) {
+                            random_position = find_random_position(seq_length, repl_len);
+                        }
+                        replace_pos = random_position;
                     }
                 } else if (config->mode == MODE_RANDOM_FIXED) {
-                    /* Random fixed mode: only replace the randomly selected sequence at fixed position */
-                    if (record_count == random_read_index) {
+                    /* Random-fixed mode: only replace the pre-selected sequence at fixed position */
+                    if (record_count == random_seq_index) {
                         should_replace = 1;
                         replace_pos = config->position;
                     }
@@ -408,7 +454,7 @@ static int process_fasta(const ReplacerConfig *config) {
                     original_segment[repl_len] = '\0';
                     
                     /* Perform replacement */
-                    memcpy(current_seq + replace_pos, config->replacement_seq, repl_len);
+                    memcpy(current_seq + replace_pos, selected_replacement, repl_len);
                     
                     /* Log replacement */
                     if (log_fp != NULL) {
@@ -416,14 +462,14 @@ static int process_fasta(const ReplacerConfig *config) {
                         rep_record.seq_id = current_id;
                         rep_record.position = replace_pos;
                         rep_record.original_seq = original_segment;
-                        rep_record.new_seq = config->replacement_seq;
+                        rep_record.new_seq = selected_replacement;
                         log_replacement(log_fp, &rep_record);
                     }
                     
                     if (config->verbose) {
                         printf("Replaced in %s at position %zu: %s -> %s\n",
                                current_id, replace_pos, original_segment, 
-                               config->replacement_seq);
+                               selected_replacement);
                     }
                     
                     free(original_segment);
@@ -463,14 +509,17 @@ static int process_fasta(const ReplacerConfig *config) {
                 replace_pos = config->position;
             }
         } else if (config->mode == MODE_RANDOM) {
-            /* Random mode: only replace the randomly selected sequence at random position */
-            if (record_count == random_read_index) {
+            /* Random mode: only replace the pre-selected sequence at random position */
+            if (record_count == random_seq_index) {
                 should_replace = 1;
-                replace_pos = find_random_position(seq_length, repl_len);
+                if (random_position == 0) {
+                    random_position = find_random_position(seq_length, repl_len);
+                }
+                replace_pos = random_position;
             }
         } else if (config->mode == MODE_RANDOM_FIXED) {
-            /* Random fixed mode: only replace the randomly selected sequence at fixed position */
-            if (record_count == random_read_index) {
+            /* Random-fixed mode: only replace the pre-selected sequence at fixed position */
+            if (record_count == random_seq_index) {
                 should_replace = 1;
                 replace_pos = config->position;
             }
@@ -484,21 +533,21 @@ static int process_fasta(const ReplacerConfig *config) {
             memcpy(original_segment, current_seq + replace_pos, repl_len);
             original_segment[repl_len] = '\0';
             
-            memcpy(current_seq + replace_pos, config->replacement_seq, repl_len);
+            memcpy(current_seq + replace_pos, selected_replacement, repl_len);
             
             if (log_fp != NULL) {
                 ReplacementRecord rep_record;
                 rep_record.seq_id = current_id;
                 rep_record.position = replace_pos;
                 rep_record.original_seq = original_segment;
-                rep_record.new_seq = config->replacement_seq;
+                rep_record.new_seq = selected_replacement;
                 log_replacement(log_fp, &rep_record);
             }
             
             if (config->verbose) {
                 printf("Replaced in %s at position %zu: %s -> %s\n",
                        current_id, replace_pos, original_segment, 
-                       config->replacement_seq);
+                       selected_replacement);
             }
             
             free(original_segment);
